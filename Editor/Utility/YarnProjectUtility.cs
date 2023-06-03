@@ -372,30 +372,6 @@ namespace Yarn.Unity.Editor
             // existing one. Do this by finding all yarn scripts in all
             // yarn projects, and get the string tags inside them.
 
-            var allYarnFiles =
-                // get all yarn projects across the entire project
-                AssetDatabase.FindAssets($"t:{nameof(YarnProject)}")
-                // Get the path for each asset's GUID
-                .Select(guid => AssetDatabase.GUIDToAssetPath(guid))
-                // Get the importer for each asset at this path
-                .Select(path => AssetImporter.GetAtPath(path))
-                // Ensure it's a YarnProjectImporter
-                .OfType<YarnProjectImporter>()
-                // Ensure that its import data is present
-                .Where(i => i.ImportData != null)
-                // Get all of their source scripts, as a single sequence
-                .SelectMany(i => i.ImportData.yarnFiles)
-                // Get the path for each asset
-                .Select(sourceAsset => AssetDatabase.GetAssetPath(sourceAsset))
-                // get each asset importer for that path
-                .Select(path => AssetImporter.GetAtPath(path))
-                // ensure that it's a YarnImporter
-                .OfType<YarnImporter>()
-                // get the path for each importer's asset (the compiler
-                // will use this)
-                .Select(i => AssetDatabase.GetAssetPath(i))
-                // remove any nulls, in case any are found
-                .Where(path => path != null);
 
 #if YARNSPINNER_DEBUG
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -406,26 +382,58 @@ namespace Yarn.Unity.Editor
             // Compile all of these, and get whatever existing string tags
             // they had. Do each in isolation so that we can continue even
             // if a file contains a parse error.
-            var allExistingTags = allYarnFiles.SelectMany(path =>
+
+            List<string> GetExistingLines()
             {
-                // Compile this script in strings-only mode to get
-                // string entries
-                var compilationJob = Yarn.Compiler.CompilationJob.CreateFromFiles(path);
-                compilationJob.CompilationType = Yarn.Compiler.CompilationJob.Type.StringsOnly;
-                compilationJob.Library = library;
 
-                var result = Yarn.Compiler.Compiler.Compile(compilationJob);
+                var allYarnFiles =
+                    // get all yarn projects across the entire project
+                    AssetDatabase.FindAssets($"t:{nameof(YarnProject)}")
+                    // Get the path for each asset's GUID
+                    .Select(guid => AssetDatabase.GUIDToAssetPath(guid))
+                    // Get the importer for each asset at this path
+                    .Select(path => AssetImporter.GetAtPath(path))
+                    // Ensure it's a YarnProjectImporter
+                    .OfType<YarnProjectImporter>()
+                    // Ensure that its import data is present
+                    .Where(i => i.ImportData != null)
+                    // Get all of their source scripts, as a single sequence
+                    .SelectMany(i => i.ImportData.yarnFiles)
+                    // Get the path for each asset
+                    .Select(sourceAsset => AssetDatabase.GetAssetPath(sourceAsset))
+                    // get each asset importer for that path
+                    .Select(path => AssetImporter.GetAtPath(path))
+                    // ensure that it's a YarnImporter
+                    .OfType<YarnImporter>()
+                    // get the path for each importer's asset (the compiler
+                    // will use this)
+                    .Select(i => AssetDatabase.GetAssetPath(i))
+                    // remove any nulls, in case any are found
+                    .Where(path => path != null);
+                return allYarnFiles.SelectMany(path =>
+                {
+                    // Compile this script in strings-only mode to get
+                    // string entries
+                    var compilationJob = Yarn.Compiler.CompilationJob.CreateFromFiles(path);
+                    compilationJob.CompilationType = Yarn.Compiler.CompilationJob.Type.StringsOnly;
+                    compilationJob.Library = library;
 
-                bool containsErrors = result.Diagnostics
-                    .Any(d => d.Severity == Compiler.Diagnostic.DiagnosticSeverity.Error);
+                    var result = Yarn.Compiler.Compiler.Compile(compilationJob);
 
-                if (containsErrors) {
-                    Debug.LogWarning($"Can't check for existing line tags in {path} because it contains errors.");
-                    return new string[] { };
-                }
-                
-                return result.StringTable.Where(i => i.Value.isImplicitTag == false).Select(i => i.Key);
-            }).ToList(); // immediately execute this query so we can determine timing information
+                    bool containsErrors = result.Diagnostics
+                        .Any(d => d.Severity == Compiler.Diagnostic.DiagnosticSeverity.Error);
+
+                    if (containsErrors)
+                    {
+                        Debug.LogWarning($"Can't check for existing line tags in {path} because it contains errors.");
+                        return new string[] { };
+                    }
+
+                    return result.StringTable.Where(i => i.Value.isImplicitTag == false).Select(i => i.Key);
+                }).ToList(); // immediately execute this query so we can determine timing information
+            }
+
+            var allExistingTags = new List<string>(1);
 
 #if YARNSPINNER_DEBUG
             stopwatch.Stop();
@@ -443,7 +451,7 @@ namespace Yarn.Unity.Editor
                 {
                     var assetPath = AssetDatabase.GetAssetPath(script);
                     var contents = File.ReadAllText(assetPath);
-
+                    allExistingTags = GetExistingLines();
                     // Produce a version of this file that contains line
                     // tags added where they're needed.
                     var taggedVersion = Yarn.Compiler.Utility.AddTagsToLines(contents, allExistingTags);
